@@ -9,8 +9,9 @@ class TestPOCO(unittest.TestCase):
 
     def test_register_gen(self):
         # Codeloader hex files and associated frequencies
-        hex_files = ['200MHz.txt', '250MHz.txt', '500MHz.txt']
-        synth_freq = [200, 250, 500]
+        hex_files = ['200MHz.txt', '250MHz.txt', '500MHz.txt', '200_1_3MHz.txt',
+                     '200_3_4MHz.txt', '200_23124_123323MHz.txt']
+        synth_freq = [200, 250, 500, 200+1./3, 200+3./4, 200+23124./123323]
 
         # Loop through the test cases.
         for fname, freq in zip(hex_files, synth_freq):

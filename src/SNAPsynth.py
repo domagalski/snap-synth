@@ -17,7 +17,8 @@
 ## along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ################################################################################
 
-from math import log, log10
+import fractions as _frac
+from math import log, log10, sqrt
 from corr import katcp_wrapper as _katcp
 
 class LMX2581(_katcp.FpgaClient):
@@ -214,11 +215,13 @@ class LMX2581(_katcp.FpgaClient):
         pll = (1 if VCO_DIV is None else VCO_DIV) * synth_mhz / ref_signal
         PLL_N = int(pll)
         frac = pll - PLL_N
-        if frac < 1.0/(1<<22) or True: # smallest fraction on the synth
+        if frac < 1.0/(1<<22): # smallest fraction on the synth
             PLL_NUM = 0
             PLL_DEN = 1
-        else: # XXX impliment this later.
-            pass
+        else:
+            fraction = _frac.Fraction(frac).limit_denominator(1<<22)
+            PLL_NUM = fraction.numerator
+            PLL_DEN = fraction.denominator
 
         return self.gen_registers(ref_signal, PLL_N, PLL_NUM, PLL_DEN, VCO_DIV,
                                   DLD_ERR_CNT=DLD_ERR_CNT,
