@@ -26,10 +26,6 @@ class LMX2581(_katcp.FpgaClient):
     This interfaces with the TI LMX2581 synth chip, which can be
     controlled with KATCP writing to a software register.
     """
-    #def __init__(self, *args, **kwargs):
-    #    # Open a connection to the ROACH and verify it.
-    #    _katcp.FpgaClient.__init__(self, *args, **kwargs)
-
     def from_codeloader(self, filename):
         """
         This function reads a file produced by Code Loader containing
@@ -61,13 +57,6 @@ class LMX2581(_katcp.FpgaClient):
         """
         This function is for precise fine-tuning of the registers.
         """
-        # This is the reset register, according to Code Loader. This must be
-        # written to the synth chip before the rest of the registers are
-        # written. I'm not totally sure if I trust Code Loader, as all data
-        # sheets say that the reset switch is on R5 and this number has the
-        # address of R0, but let's burn that bridge when we get to it.
-        self.reset = 1082589200
-
         # Set a blank register map. Parameters will be written in before sending
         # data to the synth. This is from page 29 of the LMX2581 datasheet:
         # http://www.ti.com/lit/ds/symlink/lmx2581.pdf
@@ -82,8 +71,6 @@ class LMX2581(_katcp.FpgaClient):
                      int('0b00100000011111011101101111111000', 2), # R 8
                      int('0b00000000000000000000000000000111', 2), # R 7
                      int('0b00000000000000000000010000000110', 2), # R 6
-                     #int('0b00000000000000001010100000000101', 2), # R 5
-        #                           |   |   |   |   |   |   |   |
                      int('0b00000000000000001000000000000101', 2), # R 5
                      int('0b00000000000000000000000000000100', 2), # R 4
                      int('0b00100000000000000000000000000011', 2), # R 3
@@ -165,13 +152,39 @@ class LMX2581(_katcp.FpgaClient):
         # Register R1
         # XXX No idea what charge pump gain is, but for some reason, the top
         # two bits are set, so i gotta figure out why...
-        # XXX Shouldn't I set the VCO_SEL to start at VCO 0? CodeLoader has it
-        # start at VCO 3 for some reason even though the data sheet says to
-        # start at VCO 0 if uncertain about it.
-        VCO_SEL = 2
-        # XXX The modulator order is something I need to actually determine how
-        # to set, but I'm going to use a default for now.
-        FRAC_ORDER = 2
+
+        # Select the VCO frequency
+        # VCO1: 1800 to 2270 NHz
+        # VCO2: 2135 to 2720 MHz
+        # VCO3: 2610 to 3220 MHz
+        # VCO4: 3075 to 3800 MHz
+        freq_vco = freq_pd * (PLL_N + float(PLL_NUM)/PLL_DEN)
+        if freq_vco >= 1800 and freq_vco <= 2270:
+            VCO_SEL = 0
+        elif freq_vco >= 2135 and freq_vco <= 2720:
+            VCO_SEL = 1
+        elif freq_vco >= 2610 and freq_vco <= 3220:
+            VCO_SEL = 2
+        elif freq_vco >= 3075 and freq_vco <= 3800:
+            VCO_SEL = 3
+        else:
+            raise ValueError('VCO frequency is out of range.')
+
+        # Dithering is set in R0, but it is needed for R1 stuff.
+        if PLL_NUM and PLL_DEN > 200 and not PLL_DEN % 2 and not PLL_DEN % 3:
+            FRAC_DITHER = 2
+        else:
+            FRAC_DITHER = 3
+
+        # Get the Fractional modulator order
+        if not PLL_NUM:
+            FRAC_ORDER = 0
+        elif PLL_DEN < 20:
+            FRAC_ORDER = 1
+        elif PLL_DEN % 3 and FRAC_DITHER == 3:
+            FRAC_ORDER = 3
+        else:
+            FRAC_ORDER = 2
 
         registers[reg_idx[1]] |= PLL_R << 4
         registers[reg_idx[1]] |= FRAC_ORDER << 12
@@ -179,10 +192,7 @@ class LMX2581(_katcp.FpgaClient):
         registers[reg_idx[1]] |= VCO_SEL << 25
 
         # Register R0
-        # XXX By default, dithering should be disabled, but codeloader doesn't
-        # seem to be following the data sheet.
-        FRAC_DITHER = 2
-
+        # FRAC_DITHER is computed in the section for R1
         registers[reg_idx[0]] |= (PLL_NUM & ((1<<12)-1)) << 4
         registers[reg_idx[0]] |= PLL_N << 16
         registers[reg_idx[0]] |= FRAC_DITHER << 29
@@ -226,6 +236,37 @@ class LMX2581(_katcp.FpgaClient):
         return self.gen_registers(ref_signal, PLL_N, PLL_NUM, PLL_DEN, VCO_DIV,
                                   DLD_ERR_CNT=DLD_ERR_CNT,
                                   DLD_PASS_CNT=DLD_PASS_CNT)
+
+    def get_osc_values(self, synth_mhz, ref_signal):
+        """
+        This function gets oscillator values
+        """
+        # Equation for the output frequency.
+        # f_out = f_osc * OSC_2X / PLL_R * (PLL_N + PLL_NUM/PLL_DEN) / VCO_DIV
+        # XXX Right now, I'm not going to use OSC_2X or PLL_R, so this becomes
+        # f_out = f_osc * (PLL_N + PLL_NUM/PLL_DEN) / VCO_DIV
+
+        # Get a good VCO_DIV. The minimum VCO frequency is 1800.
+        vco_min = 1800; vco_max = 3800
+        if synth_mhz > vco_min and synth_mhz < vco_max:
+            VCO_DIV = None
+        else:
+            vco_guess = int(vco_min / synth_mhz) + 1
+            VCO_DIV = vco_guess + vco_guess%2
+
+        # Get PLLN, PLL_NUM, and PLL_DEN
+        pll = (1 if VCO_DIV is None else VCO_DIV) * synth_mhz / ref_signal
+        PLL_N = int(pll)
+        frac = pll - PLL_N
+        if frac < 1.0/(1<<22): # smallest fraction on the synth
+            PLL_NUM = 0
+            PLL_DEN = 1
+        else:
+            fraction = _frac.Fraction(frac).limit_denominator(1<<22)
+            PLL_NUM = fraction.numerator
+            PLL_DEN = fraction.denominator
+
+        return (PLL_N, PLL_NUM, PLL_DEN, VCO_DIV)
 
     def lmx_write(self, registers):
         """

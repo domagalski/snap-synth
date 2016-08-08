@@ -2,7 +2,6 @@
 SNAPsynth: KATCP-based controller for the SNAP board's synth.
 """
 from distutils.core import setup
-import glob
 
 if __name__ == '__main__':
     setup(name = 'SNAPsynth',
